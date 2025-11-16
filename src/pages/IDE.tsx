@@ -207,11 +207,7 @@ export const IDE = () => {
           </div>
 
           {/* Terminal */}
-          <Terminal
-            output={terminalOutput}
-            isExecuting={isExecuting}
-            onExecute={handleExecute}
-          />
+          <Terminal currentFile={selectedFile} />
         </div>
       </div>
 

@@ -1,19 +1,24 @@
 import { useState, useEffect, useRef } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
-import { Terminal as TerminalIcon, X, Play } from 'lucide-react';
+import { Terminal as TerminalIcon, X, Play, Package } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { api } from '@/lib/api';
+import { useToast } from '@/hooks/use-toast';
 
 interface TerminalProps {
-  onExecute?: (command: string) => void;
-  output?: string[];
-  isExecuting?: boolean;
+  currentFile?: { name: string; language?: string; content?: string };
 }
 
-export const Terminal = ({ onExecute, output = [], isExecuting = false }: TerminalProps) => {
+export const Terminal = ({ currentFile }: TerminalProps) => {
   const [isVisible, setIsVisible] = useState(true);
   const [input, setInput] = useState('');
+  const [output, setOutput] = useState<string[]>(['Welcome to AIndroCode Terminal', 'Type any command or "run" to execute current file', '']);
+  const [isExecuting, setIsExecuting] = useState(false);
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -21,10 +26,118 @@ export const Terminal = ({ onExecute, output = [], isExecuting = false }: Termin
     }
   }, [output]);
 
-  const handleExecute = () => {
-    if (input.trim() && onExecute) {
-      onExecute(input);
-      setInput('');
+  const addOutput = (text: string) => {
+    setOutput(prev => [...prev, text]);
+  };
+
+  const handleExecute = async () => {
+    if (!input.trim()) return;
+
+    const command = input.trim();
+    addOutput(`$ ${command}`);
+    setHistory(prev => [...prev, command]);
+    setHistoryIndex(-1);
+    setInput('');
+    setIsExecuting(true);
+
+    try {
+      // Handle special commands
+      if (command === 'clear') {
+        setOutput(['']);
+        setIsExecuting(false);
+        return;
+      }
+
+      if (command === 'run' && currentFile?.content) {
+        // Run current file
+        const language = currentFile.language || 'javascript';
+        const result = await api.executeCode({
+          code: currentFile.content,
+          language
+        });
+
+        if (result.stdout) addOutput(result.stdout);
+        if (result.stderr) addOutput(`ERROR: ${result.stderr}`);
+        addOutput(`Exit code: ${result.exitCode}`);
+        
+        if (!result.success) {
+          toast({
+            title: 'Execution failed',
+            description: result.stderr || 'Unknown error',
+            variant: 'destructive'
+          });
+        }
+      } else if (command.startsWith('npm install') || command.startsWith('pip install')) {
+        // Package installation
+        const parts = command.split(' ');
+        const packageManager = parts[0] as 'npm' | 'pip';
+        const packages = parts.slice(2);
+
+        addOutput(`Installing ${packages.join(', ')}...`);
+
+        const result = await api.installPackages({
+          packageManager,
+          packages
+        });
+
+        if (result.stdout) addOutput(result.stdout);
+        if (result.stderr) addOutput(result.stderr);
+        
+        if (result.success) {
+          toast({
+            title: 'Packages installed',
+            description: `Successfully installed: ${packages.join(', ')}`
+          });
+        }
+      } else {
+        // Execute as shell command
+        const result = await api.executeCommand({
+          command,
+          timeout: 30000
+        });
+
+        if (result.stdout) addOutput(result.stdout);
+        if (result.stderr) addOutput(result.stderr);
+        
+        if (!result.success && result.error) {
+          addOutput(`ERROR: ${result.error}`);
+        }
+      }
+    } catch (error: any) {
+      addOutput(`ERROR: ${error.message || 'Failed to execute command'}`);
+      toast({
+        title: 'Command failed',
+        description: error.message,
+        variant: 'destructive'
+      });
+    } finally {
+      setIsExecuting(false);
+      addOutput('');
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleExecute();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (history.length > 0) {
+        const newIndex = historyIndex === -1 ? history.length - 1 : Math.max(0, historyIndex - 1);
+        setHistoryIndex(newIndex);
+        setInput(history[newIndex]);
+      }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (historyIndex >= 0) {
+        const newIndex = historyIndex + 1;
+        if (newIndex >= history.length) {
+          setHistoryIndex(-1);
+          setInput('');
+        } else {
+          setHistoryIndex(newIndex);
+          setInput(history[newIndex]);
+        }
+      }
     }
   };
 
@@ -73,8 +186,8 @@ export const Terminal = ({ onExecute, output = [], isExecuting = false }: Termin
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleExecute()}
-              placeholder="Run code..."
+              onKeyDown={handleKeyDown}
+              placeholder="Type command (run, npm install, ls, etc.)..."
               className="flex-1 bg-background px-3 py-1.5 rounded text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
               disabled={isExecuting}
             />
